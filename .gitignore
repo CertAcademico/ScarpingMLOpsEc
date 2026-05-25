@@ -1,0 +1,43 @@
+# Entorno virtual
+venv/
+.venv/
+env/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# Datos y modelos
+*.csv
+*.json
+*.xlsx
+*.pkl
+*.joblib
+*.h5
+*.pickle
+
+# Sistema
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Proyectos generados
+projects/my_projects/
+exports/
+
+# Credenciales
+.env
+*.env
+secrets.json

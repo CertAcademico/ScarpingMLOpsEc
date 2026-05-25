@@ -1,274 +1,243 @@
-# BeautifulSoup4 - Guía Completa para Estudiantes
+# ScrapingMLOpsEc — Web Scraping · OSINT · Data Science
 
-Bienvenido al repositorio educativo de **BeautifulSoup4**. Aquí encontrarás todo lo que necesitas para aprender a usar esta poderosa librería de Python para web scraping y análisis de HTML.
+Plataforma educativa y funcional para **Data Scientists** que cubre web scraping, inteligencia de fuentes abiertas (OSINT) y preprocesamiento de datos para Machine Learning.
 
-## 📁 Estructura del Repositorio
+---
+
+## Estructura del Proyecto
 
 ```
-BeautifulSoup4/
-├── README.md                    ← Este archivo
-├── TUTORIAL_INSTALACION.md      ← Guía paso a paso para instalar
-├── CHEAT_SHEET.md              ← Referencia rápida de comandos
-├── ejemplos_basicos.py         ← Ejemplos básicos ejecutables
-├── ejercicios_practicos.py     ← Ejercicios para practicar
-├── soluciones.py               ← Soluciones a los ejercicios
-└── requirements.txt            ← Dependencias del proyecto
+ScrapingMLOpsEc/
+├── scraper_universal.py          ← Scraper web (cualquier URL, exporta CSV/JSON)
+├── scraping_real.py              ← Ejemplos de scraping en sitios reales
+├── ejemplos_basicos.py           ← Introducción a BeautifulSoup4
+├── ejercicios_practicos.py       ← Ejercicios guiados
+│
+├── osint_tools/
+│   ├── osint_cli.py              ← OSINT unificado: dominio + IP (NUEVO)
+│   ├── email_finder.py           ← Búsqueda de emails por dominio
+│   └── ip_checker.py             ← Geolocalización e ISP de una IP
+│
+├── ml_data_science/
+│   └── preprocessing.py          ← Pipeline de preprocesamiento para ML
+│
+├── tools/
+│   └── project_manager.py        ← Gestor de proyectos de análisis
+│
+├── requirements.txt              ← Todas las dependencias
+└── CHEAT_SHEET.md                ← Referencia rápida de BeautifulSoup4
 ```
 
-## 🚀 Inicio Rápido
+---
 
-### 1. Instalación (3 minutos)
+## Instalación
 
 ```bash
-# Opción A: Instalación global
-pip3 install beautifulsoup4
+# 1. Clonar el repositorio
+git clone https://github.com/CertAcademico/ScarpingMLOpsEc.git
+cd ScrapingMLOpsEc
 
-# Opción B: Con ambiente virtual (Recomendado)
+# 2. Crear entorno virtual
 python3 -m venv venv
-source venv/bin/activate
+source venv/bin/activate        # macOS / Linux
+# venv\Scripts\activate         # Windows
+
+# 3. Instalar dependencias
 pip install -r requirements.txt
 ```
 
-### 2. Primer Ejemplo
+---
 
-```python
-from bs4 import BeautifulSoup
+## Herramientas
 
-html = "<html><body><h1>¡Hola!</h1></body></html>"
-soup = BeautifulSoup(html, 'html.parser')
+### Web Scraper Universal
 
-print(soup.h1.string)  # ¡Hola!
-```
-
-### 3. Ejecutar Ejemplos
+Extrae información estructurada de cualquier URL. Detecta automáticamente HTML y JSON, y puede exportar los resultados.
 
 ```bash
-# Ver ejemplos básicos
-python3 ejemplos_basicos.py
+# Scraping básico (muestra en pantalla)
+python3 scraper_universal.py https://quotes.toscrape.com
 
-# Ver ejercicios (intenta resolverlos)
-python3 ejercicios_practicos.py
+# Exportar a JSON
+python3 scraper_universal.py https://quotes.toscrape.com --output resultado.json
+
+# Scraping con selector CSS y exportar a CSV
+python3 scraper_universal.py https://books.toscrape.com \
+    --selector article.product_pod \
+    --output libros.csv
+
+# Modo interactivo (menú)
+python3 scraper_universal.py
 ```
 
-## 📚 Contenido Educativo
-
-### Para Principiantes
-1. **Leer primero:** [TUTORIAL_INSTALACION.md](TUTORIAL_INSTALACION.md)
-2. **Ejecutar:** `python3 ejemplos_basicos.py`
-3. **Practicar:** `python3 ejercicios_practicos.py`
-
-### Referencia Rápida
-- **Cheat Sheet:** [CHEAT_SHEET.md](CHEAT_SHEET.md) - Todos los comandos en un lugar
-
-### Niveles de Dificultad
-
-#### 🟢 Básico
-- Parsear HTML simple
-- Encontrar elementos con `find()`
-- Extraer texto y atributos
-
-#### 🟡 Intermedio
-- Búsquedas avanzadas con `find_all()`
-- Usar CSS selectors
-- Navegar la estructura HTML
-
-#### 🔴 Avanzado
-- Web scraping de sitios reales
-- Combinación con `requests`
-- Manejo de errores y excepciones
-
-## 🎯 Objetivos de Aprendizaje
-
-Al completar este curso aprenderás:
-
-✅ Qué es BeautifulSoup4 y para qué sirve  
-✅ Cómo parsear documentos HTML  
-✅ Buscar y filtrar elementos específicos  
-✅ Extraer datos de páginas web  
-✅ Navegar la estructura HTML/XML  
-✅ Realizar web scraping ético  
-✅ Integrar con `requests` para APIs web  
-
-## 💻 Requisitos
-
-- **Python 3.7+** (verifica con `python3 --version`)
-- **pip3** (verifica con `pip3 --version`)
-- Cualquier editor de texto o IDE (VS Code, PyCharm, etc.)
-
-## 📖 Documentación Oficial
-
-- [BeautifulSoup4 Docs](https://www.crummy.com/software/BeautifulSoup/bs4/doc/)
-- [PyPI Package](https://pypi.org/project/beautifulsoup4/)
-
-## 🔧 Instalación de Herramientas Adicionales
-
-### Para Web Scraping Real
-
-```bash
-# Instalar requests para descargar páginas web
-pip install requests
-
-# Instalar parsers alternativos (más rápidos)
-pip install lxml
-pip install html5lib
-```
-
-### Para Desarrollo
-
-```bash
-# Instalar todas las herramientas recomendadas
-pip install -r requirements.txt
-```
-
-## 📝 Ejemplos de Uso
-
-### Ejemplo 1: Extraer títulos
-
-```python
-from bs4 import BeautifulSoup
-
-html = """
-<html>
-    <h1>Título Principal</h1>
-    <h2>Subtítulo</h2>
-</html>
-"""
-
-soup = BeautifulSoup(html, 'html.parser')
-
-# Encontrar todos los títulos
-titulos = soup.find_all(['h1', 'h2'])
-for titulo in titulos:
-    print(titulo.string)
-```
-
-### Ejemplo 2: Extraer enlaces
-
-```python
-enlaces = soup.find_all('a')
-
-for enlace in enlaces:
-    url = enlace.get('href')
-    texto = enlace.string
-    print(f"{texto}: {url}")
-```
-
-### Ejemplo 3: Web Scraping Simple
-
-```python
-import requests
-from bs4 import BeautifulSoup
-
-# Descargar página
-response = requests.get('https://ejemplo.com')
-soup = BeautifulSoup(response.content, 'html.parser')
-
-# Extraer datos
-noticias = soup.find_all('article')
-for noticia in noticias:
-    print(noticia.find('h2').string)
-```
-
-## 🎓 Estructura Recomendada de Aprendizaje
-
-### Semana 1: Fundamentos
-- [ ] Instalar BeautifulSoup4
-- [ ] Leer tutorial de instalación
-- [ ] Ejecutar ejemplos básicos
-- [ ] Entender `find()` y `find_all()`
-
-### Semana 2: Práctica
-- [ ] Resolver ejercicios básicos
-- [ ] Experimentar con diferentes HTML
-- [ ] Aprender CSS selectors
-- [ ] Practicar extracción de atributos
-
-### Semana 3: Proyectos
-- [ ] Crear mini proyecto de scraping
-- [ ] Integrar con `requests`
-- [ ] Guardar datos en CSV/JSON
-- [ ] Manejo de errores
-
-## ⚠️ Consideraciones Éticas
-
-Cuando hagas web scraping, recuerda:
-
-1. **Respeta el robots.txt** - Verifica si el sitio permite scraping
-2. **Lee los términos de servicio** - Algunos sitios lo prohíben
-3. **No hagas spam** - Limita tus solicitudes
-4. **Sé transparente** - Identifica tu bot en User-Agent
-5. **Respeta la privacidad** - No recopiles datos personales sin consentimiento
-
-Ejemplo de User-Agent:
-```python
-headers = {
-    'User-Agent': 'Mi Bot Educativo/1.0 (Propósito educativo)'
-}
-response = requests.get(url, headers=headers)
-```
-
-## 🐛 Solucionar Problemas
-
-### Error: "ModuleNotFoundError: No module named 'bs4'"
-
-```bash
-pip install beautifulsoup4
-```
-
-### Error: "AttributeError: 'NoneType' object has no attribute..."
-
-Significa que el elemento no existe. Siempre valida:
-
-```python
-elemento = soup.find('div', id='mi-div')
-if elemento:
-    print(elemento.string)
-else:
-    print("Elemento no encontrado")
-```
-
-### El HTML se ve "roto"
-
-Intenta cambiar el parser:
-
-```python
-# En lugar de 'html.parser', intenta:
-soup = BeautifulSoup(html, 'lxml')  # Más tolerante
-soup = BeautifulSoup(html, 'html5lib')  # Muy tolerante
-```
-
-## 🤝 Cómo Contribuir
-
-Si encuentras errores o quieres mejorar este material:
-
-1. Abre un issue con tu sugerencia
-2. Proporciona ejemplos de código
-3. Sé respetuoso y constructivo
-
-## 📞 Soporte
-
-Si tienes preguntas:
-1. Consulta el [CHEAT_SHEET.md](CHEAT_SHEET.md)
-2. Lee la [documentación oficial](https://www.crummy.com/software/BeautifulSoup/bs4/doc/)
-3. Busca en Stack Overflow
-4. Pregunta en foros de Python
-
-## 📄 Licencia
-
-Este material educativo es de libre uso para fines educativos.
+**Qué extrae:**
+- Título, meta descripción
+- Encabezados H1/H2/H3
+- Primeros 10 enlaces con texto y URL
+- Imágenes con alt y src
+- Párrafos y listas
+- Estadísticas de la página (total de tags, divs, tablas, etc.)
 
 ---
 
-## 🎉 ¡Estás Listo para Comenzar!
+### OSINT CLI — Análisis de Dominios e IPs
 
-Ahora que tienes todo configurado, dirígete al archivo [TUTORIAL_INSTALACION.md](TUTORIAL_INSTALACION.md) y comienza tu viaje con BeautifulSoup4.
+Herramienta unificada que detecta automáticamente si el objetivo es un dominio o IP y genera un reporte visual completo con tablas coloreadas.
 
-**Recuerda:** La práctica es la clave. Cuanto más practiques, mejor serás.
+```bash
+# Analizar dominio
+python3 osint_tools/osint_cli.py github.com
 
-¡Feliz aprendizaje! 🚀
+# Analizar IP
+python3 osint_tools/osint_cli.py 8.8.8.8
+
+# Analizar y exportar a JSON
+python3 osint_tools/osint_cli.py google.com --output reporte.json
+
+# Modo interactivo (menú)
+python3 osint_tools/osint_cli.py
+```
+
+**Para dominios muestra:**
+
+| Sección | Datos |
+|---|---|
+| WHOIS | Registrador, fechas de creación/expiración, nameservers, estado |
+| DNS | Registros A, AAAA, MX, NS, TXT, CNAME, SOA |
+| HTTP / Seguridad | Status, servidor, HSTS, CSP, X-Frame-Options, Referrer-Policy |
+| IP asociada | País, ciudad, ISP, ASN, detección de proxy/VPN |
+
+**Para IPs muestra:**
+
+| Sección | Datos |
+|---|---|
+| Geolocalización | País, región, ciudad, coordenadas, timezone |
+| Red | ISP, organización, ASN |
+| Seguridad | Es proxy/VPN, es hosting/datacenter |
+| Reverso | Hostname (PTR) |
 
 ---
 
-**Última actualización:** Mayo 2024  
-**Versión:** 1.0  
-**Compatible con:** BeautifulSoup4 4.9+
+### Email Finder
+
+Busca emails expuestos públicamente en las páginas principales de un dominio.
+
+```python
+from osint_tools.email_finder import EmailFinder
+
+finder = EmailFinder("empresa.com")
+emails = finder.find_company_emails()
+finder.save_to_file("emails.txt")
+```
+
+---
+
+### IP Checker
+
+Geolocalización e ISP de una IP puntual.
+
+```python
+from osint_tools.ip_checker import IPChecker
+
+checker = IPChecker("1.1.1.1")
+checker.print_report()
+```
+
+---
+
+### Preprocesamiento ML
+
+Pipeline de limpieza y transformación de datos para Machine Learning.
+
+```python
+from ml_data_science.preprocessing import DataPreprocessor
+
+proc = DataPreprocessor("datos.csv")
+proc.get_info()
+proc.handle_missing_values(strategy="mean")
+proc.remove_duplicates()
+proc.remove_outliers(method="iqr")
+proc.encode_categorical()
+proc.scale_features(method="standard")
+proc.save("datos_limpios.csv")
+```
+
+**Métodos disponibles:**
+
+| Método | Descripción |
+|---|---|
+| `handle_missing_values(strategy)` | Imputa faltantes: `mean`, `median`, `most_frequent` |
+| `remove_duplicates()` | Elimina filas duplicadas |
+| `remove_outliers(method)` | IQR o Z-score |
+| `encode_categorical(columns)` | Label Encoding de variables categóricas |
+| `scale_features(method)` | `standard` (StandardScaler) o `minmax` |
+| `reset()` | Vuelve a los datos originales |
+
+---
+
+### Gestor de Proyectos
+
+Crea y gestiona proyectos de análisis de datos con estructura estandarizada.
+
+```bash
+# Crear proyecto
+python3 tools/project_manager.py --create "Mi Análisis" --type ml
+
+# Listar proyectos
+python3 tools/project_manager.py --list
+
+# Abrir proyecto (ver estructura y archivos)
+python3 tools/project_manager.py --open "Mi Análisis"
+
+# Estadísticas
+python3 tools/project_manager.py --stats
+
+# Eliminar
+python3 tools/project_manager.py --delete "Mi Análisis"
+```
+
+**Estructura generada por proyecto:**
+```
+Mi Análisis/
+├── data/raw/          ← Datos crudos (sin tocar)
+├── data/processed/    ← Datos limpios
+├── data/external/     ← Fuentes externas
+├── scripts/           ← Scripts Python
+├── notebooks/         ← Jupyter Notebooks
+├── models/            ← Modelos entrenados
+├── results/           ← Resultados y reportes
+├── docs/
+├── README.md
+└── config.json
+```
+
+---
+
+## Dependencias
+
+```
+beautifulsoup4   Web scraping / parsing HTML
+requests         Peticiones HTTP
+lxml             Parser HTML rápido
+dnspython        Consultas DNS (OSINT)
+python-whois     Consultas WHOIS (OSINT)
+rich             Presentación visual en terminal
+pandas           Análisis de datos
+numpy            Computación numérica
+scikit-learn     Machine Learning
+scipy            Estadísticas
+openpyxl         Lectura/escritura Excel
+```
+
+---
+
+## Consideraciones éticas
+
+- Respeta el archivo `robots.txt` del sitio objetivo.
+- No automatices peticiones masivas sin control de velocidad.
+- Usa estas herramientas únicamente en sistemas y dominios para los que tienes autorización.
+- Las herramientas OSINT consultan únicamente información pública disponible en internet.
+
+---
+
+**Versión:** 2.0 — Mayo 2025
