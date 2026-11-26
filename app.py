@@ -11,11 +11,11 @@ import time
 import uuid
 from collections import deque
 from email.utils import parsedate_to_datetime
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import urljoin, urlparse, urlunparse
+from urllib.parse import unquote, urljoin, urlparse, urlunparse
 
 import requests
 from bs4 import BeautifulSoup
@@ -94,12 +94,15 @@ def download(url, timeout):
     raise ValueError("Demasiadas redirecciones.")
 
 
+EVIDENCE_EXTENSIONS = {"image/png": ".png", "image/jpeg": ".jpg", "application/pdf": ".pdf", "multipart/related": ".mhtml", "text/html": ".html"}
+
+
 def save_evidence(url, body, content_type, status, response_headers=None, origen=None):
     digest = hashlib.sha256(body).hexdigest()
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
     capture_id = f"{stamp}_{digest[:12]}"
     EVIDENCE_DIR.mkdir(parents=True, exist_ok=True)
-    extension = ".png" if content_type == "image/png" else (".json" if "json" in content_type.lower() else ".html")
+    extension = EVIDENCE_EXTENSIONS.get(content_type.split(";")[0].strip().lower()) or (".json" if "json" in content_type.lower() else ".html")
     (EVIDENCE_DIR / f"{capture_id}{extension}").write_bytes(body)
     record = {
         "id": capture_id,
@@ -560,6 +563,77 @@ def ejecutar_chequeo(monitor, force_snapshot=False):
     return record
 
 
+MANUAL_MAX_BYTES = 25 * 1024 * 1024
+MANUAL_TYPES = {".html": "text/html", ".htm": "text/html", ".mhtml": "multipart/related", ".mht": "multipart/related",
+                ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".pdf": "application/pdf"}
+
+
+def tipo_archivo_manual(nombre, body):
+    """Determina el tipo por la extensión y lo confirma con la firma del contenido."""
+    extension = Path(nombre).suffix.lower()
+    content_type = MANUAL_TYPES.get(extension)
+    if not content_type:
+        raise ValueError("Formato no admitido. Usa HTML, MHTML, PNG, JPG o PDF.")
+    firmas = {"image/png": body.startswith(b"\x89PNG\r\n\x1a\n"), "image/jpeg": body.startswith(b"\xff\xd8\xff"),
+              "application/pdf": body.startswith(b"%PDF-")}
+    if content_type in firmas and not firmas[content_type]:
+        raise ValueError(f"El contenido no corresponde a un archivo {extension}.")
+    if content_type in ("text/html", "multipart/related") and b"\x00" in body[:4096]:
+        raise ValueError(f"El contenido no parece un archivo {extension} de texto.")
+    return content_type
+
+
+def importar_captura_manual(monitor_id, body, nombre, nota="", observado_at=None):
+    """Añade a la línea de tiempo una captura obtenida por el analista en su navegador (cadena de custodia)."""
+    if not body:
+        raise ValueError("El archivo está vacío.")
+    if len(body) > MANUAL_MAX_BYTES:
+        raise OverflowError
+    nombre = Path(nombre or "captura").name[:200]
+    content_type = tipo_archivo_manual(nombre, body)
+    if observado_at:
+        try:
+            observado = datetime.fromisoformat(observado_at.replace("Z", "+00:00"))
+            observado = observado if observado.tzinfo else observado.replace(tzinfo=timezone.utc)
+        except ValueError as exc:
+            raise ValueError("Fecha de observación no válida.") from exc
+        if observado > _now() + timedelta(minutes=5):
+            raise ValueError("La fecha de observación no puede estar en el futuro.")
+        observado_at = observado.astimezone(timezone.utc).isoformat()
+    with _monitor_lock:
+        monitor = next((m for m in load_monitors() if m["id"] == monitor_id), None)
+    if not monitor:
+        return None
+    origen = origen_consulta()
+    evidence = save_evidence(monitor["url"], body, content_type, None, {}, origen)
+    record = {"at": _now().isoformat(), "tipo": "manual", "url": monitor["url"], "observado_at": observado_at,
+              "nota": (nota or "").strip()[:1000], "nombre_original": nombre, "content_type": content_type,
+              "sha256": evidence["sha256"], "bytes": evidence["bytes"], "evidence_file": f"data/osint_evidence/{evidence['file']}",
+              "origen": origen, "origen_nota": "Salida de este equipo al importar; puede diferir de la usada por el navegador."}
+    if content_type == "text/html":
+        record["huella"] = huella_contenido(body, content_type)
+        png, error = capturar_snapshot(body)
+        if png:
+            shot = save_evidence(monitor["url"], png, "image/png", None, {}, origen)
+            record["snapshot"] = {"file": shot["file"], "sha256": shot["sha256"], "bytes": shot["bytes"], "html": record["evidence_file"],
+                                  "render": "HTML importado, sin JavaScript ni recursos externos"}
+        else:
+            record["snapshot"] = {"error": error, "html": record["evidence_file"]}
+    elif content_type in ("image/png", "image/jpeg"):
+        record["snapshot"] = {"file": evidence["file"], "sha256": evidence["sha256"], "bytes": evidence["bytes"], "render": "Imagen importada"}
+    with _monitor_lock:
+        monitors = load_monitors()
+        current = next((m for m in monitors if m["id"] == monitor_id), None)
+        if not current:
+            return None
+        MONITOR_DIR.mkdir(parents=True, exist_ok=True)
+        with timeline_file(monitor_id).open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+        current["manual_count"] = current.get("manual_count", 0) + 1
+        save_monitors(monitors)
+    return record
+
+
 def run_monitor_check(monitor_id, force_snapshot=False):
     """Ejecuta y registra un chequeo; devuelve el registro o None si el monitor no existe o ya se está consultando."""
     with _monitor_lock:
@@ -686,8 +760,8 @@ def delete_monitor(monitor_id):
     return True
 
 
-MONITOR_PATH = re.compile(r"^/api/monitors/([a-f0-9]{12})(?:/(timeline|check|snapshot|pause|resume|interval|settings))?$")
-EVIDENCE_PNG_PATH = re.compile(r"^/evidence/(\d{8}T\d{6,12}Z_[a-f0-9]{12}\.png)$")
+MONITOR_PATH = re.compile(r"^/api/monitors/([a-f0-9]{12})(?:/(timeline|check|snapshot|manual|pause|resume|interval|settings))?$")
+EVIDENCE_IMAGE_PATH = re.compile(r"^/evidence/(\d{8}T\d{6,12}Z_[a-f0-9]{12}\.(png|jpg))$")
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -711,12 +785,12 @@ class Handler(BaseHTTPRequestHandler):
             if not monitor:
                 return self.respond(404, {"error": "Monitor no encontrado"})
             return self.respond(200, {"monitor": monitor, "timeline": read_timeline(monitor["id"])})
-        shot = EVIDENCE_PNG_PATH.match(self.path)
+        shot = EVIDENCE_IMAGE_PATH.match(self.path)
         if shot:
             path = EVIDENCE_DIR / shot.group(1)
             if not path.is_file():
-                return self.respond(404, {"error": "Snapshot no encontrado"})
-            return self.respond(200, path.read_bytes(), "image/png")
+                return self.respond(404, {"error": "Imagen no encontrada"})
+            return self.respond(200, path.read_bytes(), "image/png" if shot.group(2) == "png" else "image/jpeg")
         if self.path == "/api/evidence":
             records = json.loads(INDEX_FILE.read_text("utf-8")) if INDEX_FILE.exists() else []
             return self.respond(200, records[-100:][::-1])
@@ -736,14 +810,24 @@ class Handler(BaseHTTPRequestHandler):
             return self.respond(404, {"error": "No encontrado"})
         return self.respond(200, {"ok": True}) if delete_monitor(match.group(1)) else self.respond(404, {"error": "Monitor no encontrado"})
 
+    def manual_upload(self, monitor_id):
+        length = int(self.headers.get("Content-Length", "0"))
+        if length > MANUAL_MAX_BYTES:
+            raise OverflowError
+        record = importar_captura_manual(monitor_id, self.rfile.read(length), unquote(self.headers.get("X-Filename", "")),
+                                         unquote(self.headers.get("X-Nota", "")), unquote(self.headers.get("X-Observado-At", "")) or None)
+        return self.respond(201, record) if record else self.respond(404, {"error": "Monitor no encontrado"})
+
     def monitor_post(self):
         try:
             if self.path == "/api/monitors":
                 return self.respond(201, create_monitor(self.read_payload()))
             match = MONITOR_PATH.match(self.path)
-            if not match or match.group(2) not in ("check", "snapshot", "pause", "resume", "interval", "settings"):
+            if not match or match.group(2) not in ("check", "snapshot", "manual", "pause", "resume", "interval", "settings"):
                 return self.respond(404, {"error": "No encontrado"})
             monitor_id, action = match.groups()
+            if action == "manual":
+                return self.manual_upload(monitor_id)
             if action in ("check", "snapshot"):
                 record = run_monitor_check(monitor_id, force_snapshot=action == "snapshot")
                 return self.respond(200, record) if record else self.respond(409, {"error": "El monitor no existe o ya se está consultando."})
@@ -755,7 +839,7 @@ class Handler(BaseHTTPRequestHandler):
             monitor = update_monitor(monitor_id, changes)
             return self.respond(200, monitor) if monitor else self.respond(404, {"error": "Monitor no encontrado"})
         except OverflowError:
-            return self.respond(413, {"error": "Solicitud demasiado grande"})
+            return self.respond(413, {"error": "El archivo supera el límite de 25 MB." if self.path.endswith("/manual") else "Solicitud demasiado grande"})
         except (ValueError, json.JSONDecodeError) as exc:
             return self.respond(400, {"error": str(exc)})
 

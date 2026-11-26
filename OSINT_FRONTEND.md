@@ -49,6 +49,12 @@ Cuando un sitio está en línea pero rechaza la consulta, la pestaña **Monitore
 
 Si el sitio envía `Retry-After`, la siguiente consulta respeta ese tiempo. La línea de tiempo muestra el estado como franja (las consultas sin respuesta aparecen rayadas) y, debajo, el tiempo de respuesta, con las marcas de cambio sobre ambas. La tabla lista cada consulta con la ruta de su evidencia, y el historial se exporta en JSON o CSV.
 
+### Capturas manuales del analista
+
+Cuando el sitio bloquea las consultas automatizadas (por ejemplo, un desafío de Cloudflare), el analista puede ver la página en su navegador, guardarla (Archivo › Guardar como… o una captura de pantalla) e incorporarla con «Importar captura manual». Se admiten HTML, MHTML, PNG, JPG y PDF de hasta 25 MB. El tipo se confirma con la firma del archivo, no solo con su extensión. Al recibirlo, la app calcula su SHA-256, lo guarda en `data/osint_evidence/` y lo añade a la línea de tiempo con la fecha en que se vio (no puede ser futura), la nota del analista, el nombre original y la salida de este equipo en el momento de importarlo, que puede diferir de la usada por el navegador. Los HTML importados se convierten además en un snapshot visual con el mismo método sin JavaScript.
+
+Las capturas manuales aparecen como rombos sobre la línea de tiempo y como filas propias en la tabla. No modifican el estado ni los tiempos de respuesta del monitor, que solo reflejan las consultas automáticas.
+
 Los snapshots requieren Playwright y Chromium: `venv/bin/pip install -r requirements.txt` y `venv/bin/python -m playwright install chromium`. Sin ellos, el monitoreo sigue funcionando y la pestaña indica cómo instalarlos. La app solo sirve los snapshots PNG (`/evidence/<archivo>.png`); el HTML capturado nunca se abre en el navegador, porque ejecutaría código del sitio dentro de la app.
 
 Los monitores y sus líneas de tiempo se guardan en `data/monitors/` y continúan al reiniciar la app; las consultas solo se ejecutan mientras `app.py` esté en marcha. Eliminar un monitor borra su línea de tiempo, pero conserva las capturas.
