@@ -240,4 +240,17 @@ openpyxl         Lectura/escritura Excel
 
 ---
 
-**Versión:** 2.0 — Mayo 2025
+## Autor y comunidad
+
+Creado por **CertAcademico** para la comunidad de ciberseguridad y Data Science hispanohablante.
+
+Si este proyecto te fue útil:
+- Síguenos en GitHub: [github.com/CertAcademico](https://github.com/CertAcademico)
+- Síguenos en LinkedIn y deja un comentario contando cómo lo usaste
+- Únete a la comunidad: **@RedCiberSeg**
+
+Comentarios, sugerencias y pull requests son bienvenidos.
+
+---
+
+**Versión:** 2.0 — Noviembre 2026

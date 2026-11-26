@@ -602,4 +602,17 @@ source venv/bin/activate
 
 ---
 
-**Versión:** 2.0 — Mayo 2025
+## Autor y comunidad
+
+Tutorial creado por **CertAcademico** para la comunidad de ciberseguridad y Data Science en español.
+
+Si aprendiste algo nuevo con este tutorial:
+- Síguenos en GitHub: [github.com/CertAcademico](https://github.com/CertAcademico)
+- Déjanos un comentario en LinkedIn contando qué construiste con estas herramientas
+- Únete y comparte con la comunidad: **@RedCiberSeg**
+
+Tu feedback ayuda a mejorar el contenido para toda la comunidad.
+
+---
+
+**Versión:** 2.0 — Noviembre 2026

@@ -41,3 +41,6 @@ exports/
 .env
 *.env
 secrets.json
+
+# Evidencia OSINT (puede contener datos de terceros)
+data/
