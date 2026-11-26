@@ -94,12 +94,12 @@ def download(url, timeout):
     raise ValueError("Demasiadas redirecciones.")
 
 
-def save_evidence(url, body, content_type, status, response_headers=None):
+def save_evidence(url, body, content_type, status, response_headers=None, origen=None):
     digest = hashlib.sha256(body).hexdigest()
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
     capture_id = f"{stamp}_{digest[:12]}"
     EVIDENCE_DIR.mkdir(parents=True, exist_ok=True)
-    extension = ".json" if "json" in content_type.lower() else ".html"
+    extension = ".png" if content_type == "image/png" else (".json" if "json" in content_type.lower() else ".html")
     (EVIDENCE_DIR / f"{capture_id}{extension}").write_bytes(body)
     record = {
         "id": capture_id,
@@ -111,12 +111,43 @@ def save_evidence(url, body, content_type, status, response_headers=None):
         "bytes": len(body),
         "sha256": digest,
         "file": f"{capture_id}{extension}",
+        "origen": origen,
     }
     with _index_lock:
         records = json.loads(INDEX_FILE.read_text("utf-8")) if INDEX_FILE.exists() else []
         records.append(record)
         INDEX_FILE.write_text(json.dumps(records, ensure_ascii=False, indent=2), encoding="utf-8")
     return record
+
+
+ORIGEN_SERVICIOS = ("https://ipinfo.io/json", "https://ipwho.is/")
+
+
+def origen_consulta():
+    """IP pública de salida de este equipo (p. ej. la VPN) y su ubicación aproximada, según un servicio externo.
+
+    La ubicación es la que el servicio asocia a la IP; con VPN corresponde al servidor de salida, no al equipo.
+    """
+    errores = []
+    for url in ORIGEN_SERVICIOS:
+        try:
+            data = requests.get(url, timeout=6, headers={"User-Agent": USER_AGENT}).json()
+            if "ipwho.is" in url:
+                if not data.get("success", True):
+                    raise ValueError(data.get("message", "respuesta no válida"))
+                connection = data.get("connection") or {}
+                red = f"AS{connection['asn']} {connection.get('org', '')}".strip() if connection.get("asn") else connection.get("org")
+                zona = (data.get("timezone") or {}).get("id")
+                pais = data.get("country_code") or data.get("country")
+            else:
+                red, zona, pais = data.get("org"), data.get("timezone"), data.get("country")
+            if not data.get("ip"):
+                raise ValueError("sin IP en la respuesta")
+            return {"ip": data["ip"], "ciudad": data.get("city"), "region": data.get("region"), "pais": pais, "red": red,
+                    "zona_horaria": zona, "fuente": urlparse(url).hostname, "consultado_at": datetime.now(timezone.utc).isoformat()}
+        except Exception as exc:
+            errores.append(f"{urlparse(url).hostname}: {str(exc)[:80]}")
+    return {"ip": None, "error": "; ".join(errores), "consultado_at": datetime.now(timezone.utc).isoformat()}
 
 
 @lru_cache(maxsize=128)
@@ -333,7 +364,8 @@ def explore_events(settings):
     def progress():
         return {"visited": len(nodes), "queued": len(queue), "errors": len(errors), "max_pages": max_pages}
 
-    yield {"type": "start", "url": start, "settings": public_settings, **progress()}
+    origen = origen_consulta()
+    yield {"type": "start", "url": start, "settings": public_settings, "origen": origen, **progress()}
     while queue and len(nodes) < max_pages:
         url, depth = queue.popleft()
         if nodes and delay:
@@ -349,7 +381,7 @@ def explore_events(settings):
                 identity = identidad_sitio(final_url)
             else:
                 title, links, emails, identity = inspect_body(final_url, body, content_type)
-            evidence = save_evidence(final_url, body, content_type, status, response_headers)
+            evidence = save_evidence(final_url, body, content_type, status, response_headers, origen)
             captures.append(evidence)
             node = {"id": final_url, "label": title[:36] or domain_of(final_url), "url": final_url, "domain": domain_of(final_url), "depth": depth, "status": status, "accessible": status < 400, "sha256": evidence["sha256"], "bytes": evidence["bytes"], "content_type": content_type, "response_headers": response_headers, "evidence_file": f"data/osint_evidence/{evidence['file']}", "links_found": len(links), "emails": emails[:20], "identity": identity, "diagnostico": diagnosticar_respuesta(status, response_headers, body)}
             nodes.append(node)
@@ -375,7 +407,7 @@ def explore_events(settings):
             error = {"url": url, "error": str(exc)[:240]}
             errors.append(error)
             yield {"type": "error", "error": error, **progress()}
-    result = {"nodes": nodes, "edges": edges, "captures": captures, "errors": errors, "settings": public_settings}
+    result = {"nodes": nodes, "edges": edges, "captures": captures, "errors": errors, "settings": public_settings, "origen": origen}
     yield {"type": "done", "result": result, **progress()}
 
 
@@ -392,6 +424,10 @@ MONITOR_DIR = ROOT / "data" / "monitors"
 MONITORS_FILE = MONITOR_DIR / "monitors.json"
 MONITOR_INTERVALS = (300, 900, 1800, 3600, 21600, 86400)
 MONITOR_TIMEOUT = 15
+SNAPSHOT_INTERVALS = (0, 10800, 21600, 43200, 86400)
+SNAPSHOT_DEFAULT = 10800
+SNAPSHOT_MAX_HEIGHT = 6000
+_snapshot_lock = threading.Lock()
 MAX_MONITORS = 20
 _monitor_lock = threading.Lock()
 _monitor_wake = threading.Event()
@@ -452,21 +488,57 @@ def huella_contenido(body, content_type=""):
     return hashlib.sha256(re.sub(r"\s+", " ", text).strip().encode("utf-8")).hexdigest()
 
 
-def ejecutar_chequeo(monitor):
+def capturar_snapshot(body):
+    """Renderiza el HTML capturado como PNG, sin JavaScript y sin conexión.
+
+    No se descarga nada más del sitio ni se ejecuta su código: la imagen corresponde exactamente al cuerpo con hash.
+    """
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        return None, "Playwright no está instalado: venv/bin/pip install playwright && venv/bin/python -m playwright install chromium"
+    try:
+        with _snapshot_lock, sync_playwright() as playwright:
+            browser = playwright.chromium.launch()
+            try:
+                context = browser.new_context(java_script_enabled=False, offline=True, viewport={"width": 1280, "height": 900})
+                page = context.new_page()
+                page.route("**/*", lambda route: route.abort())
+                page.set_content(body.decode("utf-8", errors="replace"), wait_until="domcontentloaded", timeout=15000)
+                height = min(SNAPSHOT_MAX_HEIGHT, max(900, page.evaluate("document.documentElement.scrollHeight")))
+                png = page.screenshot(clip={"x": 0, "y": 0, "width": 1280, "height": height}, full_page=True)
+            finally:
+                browser.close()
+        return png, None
+    except Exception as exc:
+        return None, f"No se pudo generar el snapshot: {str(exc)[:160]}"
+
+
+def ejecutar_chequeo(monitor, force_snapshot=False):
     """Una sola consulta a la URL: estado, tiempo, hash y, sin caché, DNS y certificado TLS."""
     url, prev = monitor["url"], monitor.get("last") or {}
-    record = {"at": _now().isoformat(), "url": url, "status": None, "ms": None, "error": None}
+    record = {"at": _now().isoformat(), "url": url, "status": None, "ms": None, "error": None, "origen": origen_consulta()}
+    snapshot_every = monitor.get("snapshot_interval", SNAPSHOT_DEFAULT)
+    snapshot_due = force_snapshot or (snapshot_every and time.time() - monitor.get("last_snapshot_ts", 0) >= snapshot_every)
     started = time.monotonic()
     try:
         final_url, body, content_type, status, headers = download(url, MONITOR_TIMEOUT)
         record["ms"] = round((time.monotonic() - started) * 1000)
         digest = hashlib.sha256(body).hexdigest()
         huella = huella_contenido(body, content_type)
-        if huella == prev.get("huella") and prev.get("evidence_file"):
+        if huella == prev.get("huella") and prev.get("evidence_file") and not snapshot_due:
             evidence_file, reused = prev["evidence_file"], True
         else:
-            evidence = save_evidence(final_url, body, content_type, status, headers)
+            evidence = save_evidence(final_url, body, content_type, status, headers, record["origen"])
             evidence_file, reused = f"data/osint_evidence/{evidence['file']}", False
+        if snapshot_due:
+            png, snapshot_error = capturar_snapshot(body)
+            if png:
+                shot = save_evidence(final_url, png, "image/png", status, headers, record["origen"])
+                record["snapshot"] = {"file": shot["file"], "sha256": shot["sha256"], "bytes": shot["bytes"], "html": evidence_file,
+                                      "render": "HTML capturado, sin JavaScript ni recursos externos"}
+            else:
+                record["snapshot"] = {"error": snapshot_error, "html": evidence_file}
         record.update({"status": status, "final_url": final_url, "content_type": content_type, "headers": headers,
                        "sha256": digest, "huella": huella, "bytes": len(body), "evidence_file": evidence_file, "evidencia_reutilizada": reused,
                        "diagnostico": diagnosticar_respuesta(status, headers, body)})
@@ -483,11 +555,12 @@ def ejecutar_chequeo(monitor):
         ("contenido", bool(prev.get("huella")) and bool(record.get("huella")) and prev["huella"] != record["huella"]),
         ("ip", bool(prev.get("ips")) and bool(record["ips"]) and set(prev["ips"]) != set(record["ips"])),
         ("tls", bool(prev.get("tls")) and bool(record["tls"]) and prev["tls"].get("valido_hasta") != record["tls"].get("valido_hasta")),
+        ("salida", bool((prev.get("origen") or {}).get("ip")) and bool(record["origen"].get("ip")) and prev["origen"]["ip"] != record["origen"]["ip"]),
     ) if changed]
     return record
 
 
-def run_monitor_check(monitor_id):
+def run_monitor_check(monitor_id, force_snapshot=False):
     """Ejecuta y registra un chequeo; devuelve el registro o None si el monitor no existe o ya se está consultando."""
     with _monitor_lock:
         monitor = next((m for m in load_monitors() if m["id"] == monitor_id), None)
@@ -495,7 +568,7 @@ def run_monitor_check(monitor_id):
             return None
         _checking.add(monitor_id)
     try:
-        record = ejecutar_chequeo(monitor)
+        record = ejecutar_chequeo(monitor, force_snapshot)
         with _monitor_lock:
             monitors = load_monitors()
             current = next((m for m in monitors if m["id"] == monitor_id), None)
@@ -509,7 +582,10 @@ def run_monitor_check(monitor_id):
             if retry and retry > wait:
                 wait = min(retry, 86400)
             current["checks"] = current.get("checks", 0) + 1
-            current["last"] = {k: record.get(k) for k in ("at", "status", "ms", "sha256", "huella", "evidence_file", "ips", "tls", "diagnostico", "error", "cambios")}
+            current["last"] = {k: record.get(k) for k in ("at", "status", "ms", "sha256", "huella", "evidence_file", "ips", "tls", "diagnostico", "error", "cambios", "origen")}
+            if record.get("snapshot", {}).get("file"):
+                current["last_snapshot_ts"] = time.time()
+                current["last_snapshot"] = record["snapshot"] | {"at": record["at"]}
             current["next_check_ts"] = time.time() + wait
             current["next_check_at"] = datetime.fromtimestamp(current["next_check_ts"], timezone.utc).isoformat()
             if record["cambios"]:
@@ -556,7 +632,8 @@ def create_monitor(payload):
         if len(monitors) >= MAX_MONITORS:
             raise ValueError(f"Máximo {MAX_MONITORS} monitores activos.")
         monitor = {"id": uuid.uuid4().hex[:12], "url": url, "interval": interval, "active": True, "created_at": _now().isoformat(),
-                   "checks": 0, "last": None, "next_check_ts": time.time(), "next_check_at": _now().isoformat()}
+                   "checks": 0, "last": None, "next_check_ts": time.time(), "next_check_at": _now().isoformat(),
+                   "snapshot_interval": SNAPSHOT_DEFAULT}
         monitors.append(monitor)
         save_monitors(monitors)
     _monitor_wake.set()
@@ -580,6 +657,14 @@ def update_monitor(monitor_id, changes):
             if monitor.get("last"):
                 monitor["next_check_ts"] = datetime.fromisoformat(monitor["last"]["at"]).timestamp() + monitor["interval"]
                 monitor["next_check_at"] = datetime.fromtimestamp(monitor["next_check_ts"], timezone.utc).isoformat()
+        if "snapshot_interval" in changes:
+            try:
+                valid = int(changes["snapshot_interval"]) in SNAPSHOT_INTERVALS
+            except (TypeError, ValueError):
+                valid = False
+            if not valid:
+                raise ValueError("Elige un intervalo de snapshot de la lista.")
+            monitor["snapshot_interval"] = int(changes["snapshot_interval"])
         if "active" in changes:
             monitor["active"] = bool(changes["active"])
             if monitor["active"]:
@@ -601,7 +686,8 @@ def delete_monitor(monitor_id):
     return True
 
 
-MONITOR_PATH = re.compile(r"^/api/monitors/([a-f0-9]{12})(?:/(timeline|check|pause|resume|interval))?$")
+MONITOR_PATH = re.compile(r"^/api/monitors/([a-f0-9]{12})(?:/(timeline|check|snapshot|pause|resume|interval|settings))?$")
+EVIDENCE_PNG_PATH = re.compile(r"^/evidence/(\d{8}T\d{6,12}Z_[a-f0-9]{12}\.png)$")
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -625,6 +711,12 @@ class Handler(BaseHTTPRequestHandler):
             if not monitor:
                 return self.respond(404, {"error": "Monitor no encontrado"})
             return self.respond(200, {"monitor": monitor, "timeline": read_timeline(monitor["id"])})
+        shot = EVIDENCE_PNG_PATH.match(self.path)
+        if shot:
+            path = EVIDENCE_DIR / shot.group(1)
+            if not path.is_file():
+                return self.respond(404, {"error": "Snapshot no encontrado"})
+            return self.respond(200, path.read_bytes(), "image/png")
         if self.path == "/api/evidence":
             records = json.loads(INDEX_FILE.read_text("utf-8")) if INDEX_FILE.exists() else []
             return self.respond(200, records[-100:][::-1])
@@ -649,13 +741,17 @@ class Handler(BaseHTTPRequestHandler):
             if self.path == "/api/monitors":
                 return self.respond(201, create_monitor(self.read_payload()))
             match = MONITOR_PATH.match(self.path)
-            if not match or match.group(2) not in ("check", "pause", "resume", "interval"):
+            if not match or match.group(2) not in ("check", "snapshot", "pause", "resume", "interval", "settings"):
                 return self.respond(404, {"error": "No encontrado"})
             monitor_id, action = match.groups()
-            if action == "check":
-                record = run_monitor_check(monitor_id)
+            if action in ("check", "snapshot"):
+                record = run_monitor_check(monitor_id, force_snapshot=action == "snapshot")
                 return self.respond(200, record) if record else self.respond(409, {"error": "El monitor no existe o ya se está consultando."})
-            changes = {"interval": self.read_payload().get("interval")} if action == "interval" else {"active": action == "resume"}
+            if action in ("interval", "settings"):
+                payload = self.read_payload()
+                changes = {k: payload[k] for k in ("interval", "snapshot_interval") if k in payload}
+            else:
+                changes = {"active": action == "resume"}
             monitor = update_monitor(monitor_id, changes)
             return self.respond(200, monitor) if monitor else self.respond(404, {"error": "Monitor no encontrado"})
         except OverflowError:

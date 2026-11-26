@@ -44,3 +44,6 @@ secrets.json
 
 # Evidencia OSINT (puede contener datos de terceros)
 data/
+
+# Salidas de ejemplo de osint_tools
+osint_tools/emails.txt

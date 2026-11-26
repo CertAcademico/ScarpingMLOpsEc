@@ -16,6 +16,8 @@ openpyxl>=3.1.0
 # OSINT
 dnspython>=2.4.0
 python-whois>=0.9.0
+# Snapshots visuales del monitoreo (después de instalar: python -m playwright install chromium)
+playwright>=1.49
 
 # Presentación
 rich>=13.0.0
