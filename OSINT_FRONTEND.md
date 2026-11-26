@@ -22,7 +22,7 @@ Abre `http://127.0.0.1:8000` en el navegador. El servidor escucha solo en la int
 - **Pausa:** de 0 a 3 segundos entre solicitudes.
 - **Mantenerse en el dominio inicial:** limita las páginas que se visitan; los enlaces externos encontrados se muestran como relaciones.
 
-Cada respuesta se escribe en `data/osint_evidence/` y se registra en `index.json`, junto con la URL final, fecha UTC, tipo de contenido, estado HTTP, tamaño y SHA-256 del cuerpo recibido. También se conservan algunas cabeceras informativas, sin guardar cookies. El mapa y los detalles se pueden exportar en JSON desde la interfaz.
+Cada respuesta se escribe en `data/osint_evidence/` y se registra en `index.json`, junto con la URL final, fecha UTC, tipo de contenido, estado HTTP, tamaño y SHA-256 del cuerpo recibido. También se conservan algunas cabeceras informativas, sin guardar cookies. El mapa permite enfocar nodos, acercar/alejar y desplazarse; sus globos muestran URL, estado y hash. La interfaz muestra y permite copiar la ruta de cada captura. El análisis se puede exportar en JSON.
 
 Si el servidor devuelve HTTP 403, la aplicación conserva y calcula el hash de esa respuesta de denegación. Esto documenta el acceso rechazado; no recupera el contenido protegido ni intenta eludir el control del sitio.
 

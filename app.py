@@ -284,7 +284,7 @@ def explore(payload):
                 title, links, emails, identity = inspect_body(final_url, body, content_type)
             evidence = save_evidence(final_url, body, content_type, status, response_headers)
             captures.append(evidence)
-            node = {"id": final_url, "label": title[:36] or domain_of(final_url), "url": final_url, "domain": domain_of(final_url), "depth": depth, "status": status, "accessible": status < 400, "sha256": evidence["sha256"], "bytes": evidence["bytes"], "content_type": content_type, "response_headers": response_headers, "links_found": len(links), "emails": emails[:20], "identity": identity}
+            node = {"id": final_url, "label": title[:36] or domain_of(final_url), "url": final_url, "domain": domain_of(final_url), "depth": depth, "status": status, "accessible": status < 400, "sha256": evidence["sha256"], "bytes": evidence["bytes"], "content_type": content_type, "response_headers": response_headers, "evidence_file": f"data/osint_evidence/{evidence['file']}", "links_found": len(links), "emails": emails[:20], "identity": identity}
             nodes.append(node)
             if status == 403:
                 errors.append({"url": final_url, "status": status, "evidence_saved": True, "error": "El sitio rechazó la solicitud (HTTP 403). Se preservó la respuesta recibida; el contenido protegido no fue descargado."})
