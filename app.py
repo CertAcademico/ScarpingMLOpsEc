@@ -20,6 +20,10 @@ from urllib.parse import unquote, urljoin, urlparse, urlunparse
 import requests
 from bs4 import BeautifulSoup
 
+import asistente_ia
+import informe_pericial
+import red_forense
+
 
 ROOT = Path(__file__).resolve().parent
 WEB_DIR = ROOT / "web"
@@ -28,10 +32,43 @@ INDEX_FILE = EVIDENCE_DIR / "index.json"
 MAX_BODY_BYTES = 4 * 1024 * 1024
 USER_AGENT = "ScrapingMLOpsEc/1.0 (local OSINT research tool)"
 _index_lock = threading.Lock()
+_proxy_lock = threading.Lock()
+_outbound_proxy = None
 # Cabeceras informativas que se conservan; permiten identificar CDN/antibots. Nunca se guardan cookies.
 CAPTURED_HEADERS = ("Content-Type", "Date", "Server", "Content-Length", "Retry-After", "Via", "CF-Ray", "CF-Mitigated",
                     "CF-Cache-Status", "X-Cache", "X-Amz-Cf-Id", "X-Akamai-Transformed", "X-Iinfo", "X-CDN",
                     "X-Sucuri-ID", "WWW-Authenticate")
+
+
+def outbound_proxies():
+    with _proxy_lock:
+        proxy = _outbound_proxy
+    return {"http": proxy, "https": proxy} if proxy else None
+
+
+def proxy_summary():
+    with _proxy_lock:
+        proxy = _outbound_proxy
+    if not proxy:
+        return {"enabled": False, "host": None}
+    parts = urlparse(proxy)
+    return {"enabled": True, "host": parts.hostname + (f":{parts.port}" if parts.port else "")}
+
+
+def configure_proxy(value):
+    global _outbound_proxy
+    value = str(value or "").strip()
+    if value:
+        parts = urlparse(value)
+        try:
+            valid_port = parts.port is None or 1 <= parts.port <= 65535
+        except ValueError:
+            valid_port = False
+        if parts.scheme not in ("http", "https") or not parts.hostname or not valid_port or parts.query or parts.fragment:
+            raise ValueError("Usa un proxy HTTP/HTTPS válido, por ejemplo http://proxy.empresa.com:8080.")
+    with _proxy_lock:
+        _outbound_proxy = value or None
+    return proxy_summary()
 
 
 def public_http_url(value):
@@ -66,6 +103,9 @@ def download(url, timeout):
     current = public_http_url(url)
     session = requests.Session()
     session.headers.update({"User-Agent": USER_AGENT, "Accept": "text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.5"})
+    proxies = outbound_proxies()
+    if proxies:
+        session.proxies.update(proxies)
     for _ in range(6):
         current = public_http_url(current)
         response = session.get(current, timeout=timeout, allow_redirects=False, stream=True)
@@ -134,7 +174,7 @@ def origen_consulta():
     errores = []
     for url in ORIGEN_SERVICIOS:
         try:
-            data = requests.get(url, timeout=6, headers={"User-Agent": USER_AGENT}).json()
+            data = requests.get(url, timeout=6, headers={"User-Agent": USER_AGENT}, proxies=outbound_proxies()).json()
             if "ipwho.is" in url:
                 if not data.get("success", True):
                     raise ValueError(data.get("message", "respuesta no válida"))
@@ -553,12 +593,16 @@ def ejecutar_chequeo(monitor, force_snapshot=False):
     tls = certificado_tls.__wrapped__(parts.hostname or "", port, ips) if parts.scheme == "https" and ips else None
     record["ips"] = list(ips[:12])
     record["tls"] = {k: tls.get(k) for k in ("sujeto", "emisor", "valido_hasta")} if tls else None
+    if monitor.get("dns_watch") and parts.hostname:
+        record["dns"] = red_forense.registros_dns(parts.hostname)
+        record["dns_cambios"] = red_forense.comparar_dns(monitor.get("last_dns"), record["dns"])
     record["cambios"] = [name for name, changed in (
         ("estado", bool(prev) and prev.get("status") != record["status"]),
         ("contenido", bool(prev.get("huella")) and bool(record.get("huella")) and prev["huella"] != record["huella"]),
         ("ip", bool(prev.get("ips")) and bool(record["ips"]) and set(prev["ips"]) != set(record["ips"])),
         ("tls", bool(prev.get("tls")) and bool(record["tls"]) and prev["tls"].get("valido_hasta") != record["tls"].get("valido_hasta")),
         ("salida", bool((prev.get("origen") or {}).get("ip")) and bool(record["origen"].get("ip")) and prev["origen"]["ip"] != record["origen"]["ip"]),
+        ("dns", bool(record.get("dns_cambios"))),
     ) if changed]
     return record
 
@@ -664,11 +708,147 @@ def run_monitor_check(monitor_id, force_snapshot=False):
             current["next_check_at"] = datetime.fromtimestamp(current["next_check_ts"], timezone.utc).isoformat()
             if record["cambios"]:
                 current["last_change_at"] = record["at"]
+            if record.get("dns"):
+                current["last_dns"] = record["dns"]
+                if record.get("dns_cambios"):
+                    current["last_dns_change_at"] = record["at"]
+                    current["dns_changes"] = current.get("dns_changes", 0) + 1
             save_monitors(monitors)
         return record
     finally:
         with _monitor_lock:
             _checking.discard(monitor_id)
+
+
+def append_record(monitor_id, record, update=None):
+    """Añade un registro a la línea de tiempo y, opcionalmente, actualiza el monitor en la misma operación."""
+    with _monitor_lock:
+        monitors = load_monitors()
+        current = next((m for m in monitors if m["id"] == monitor_id), None)
+        if not current:
+            return None
+        MONITOR_DIR.mkdir(parents=True, exist_ok=True)
+        with timeline_file(monitor_id).open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+        if update:
+            update(current)
+        save_monitors(monitors)
+        return current
+
+
+def find_monitor(monitor_id):
+    with _monitor_lock:
+        return next((m for m in load_monitors() if m["id"] == monitor_id), None)
+
+
+def set_dns_watch(monitor_id, enabled):
+    """Enciende o apaga la vigilancia DNS. Cada cambio de estado queda en la línea de tiempo (cobertura del informe)."""
+    monitor = find_monitor(monitor_id)
+    if not monitor:
+        return None
+    enabled = bool(enabled)
+    if bool(monitor.get("dns_watch")) == enabled:
+        return monitor
+    host = urlparse(monitor["url"]).hostname or ""
+    record = {"at": _now().isoformat(), "tipo": "evento", "evento": "dns_on" if enabled else "dns_off", "url": monitor["url"]}
+    if enabled:
+        record["dns"] = red_forense.registros_dns(host)
+        offline = red_forense.comparar_dns(monitor.get("last_dns"), record["dns"])
+        if offline:
+            record["detalle"] = "Respecto a la última observación, antes de activar: " + informe_pericial._dns_texto(offline)
+    else:
+        record["detalle"] = "La resolución DNS deja de compararse en cada consulta."
+
+    def update(current):
+        current["dns_watch"] = enabled
+        if enabled:
+            current["last_dns"] = record["dns"]
+            current["dns_watch_since"] = record["at"]
+
+    return append_record(monitor_id, record, update)
+
+
+_tracing = set()
+
+
+def run_trace(monitor_id):
+    """Traza de red hacia el servidor, con PTR/ASN por salto, WHOIS del dominio y fotografía DNS; se guarda en la línea de tiempo."""
+    monitor = find_monitor(monitor_id)
+    if not monitor:
+        return None
+    with _monitor_lock:
+        if monitor_id in _tracing:
+            raise ValueError("Ya hay una traza en curso para este monitor.")
+        _tracing.add(monitor_id)
+    try:
+        parts = urlparse(monitor["url"])
+        host = parts.hostname or ""
+        ips = resolver_ips_publicas.__wrapped__(host, parts.port or (443 if parts.scheme == "https" else 80))
+        destino = next((ip for ip in ips if ":" not in ip), ips[0] if ips else None)
+        dns_actual = red_forense.registros_dns(host)
+        traza = red_forense.trazar_ruta(host, destino)
+        whois = red_forense.whois_dominio(dns_actual.get("zona") or host)
+        previa = monitor.get("last_trace_route")
+        ruta = red_forense.ruta_resumen(traza)
+        record = {"at": _now().isoformat(), "tipo": "traza", "url": monitor["url"], "origen": origen_consulta(),
+                  "traza": traza, "whois": whois, "dns": dns_actual, "ruta_cambio": previa is not None and previa != ruta}
+
+        def update(current):
+            current["last_trace_route"] = ruta
+            current["last_trace_at"] = record["at"]
+            current["traces"] = current.get("traces", 0) + 1
+
+        return record if append_record(monitor_id, record, update) else None
+    finally:
+        with _monitor_lock:
+            _tracing.discard(monitor_id)
+
+
+REPORTS_DIR = ROOT / "data" / "reports"
+REPORTS_INDEX = REPORTS_DIR / "index.json"
+REPORT_PATH = re.compile(r"^/data/reports/(informe_[a-f0-9]{12}_\d{8}T\d{6}Z\.(html|sha256))$")
+REPORT_IMAGE_PATH = re.compile(r"^/data/osint_evidence/(\d{8}T\d{6,12}Z_[a-f0-9]{12}\.(png|jpg))$")
+
+
+def emit_report(monitor_id, payload):
+    """Genera el informe pericial, lo guarda con su SHA-256 y deja constancia en la línea de tiempo."""
+    monitor = find_monitor(monitor_id)
+    if not monitor:
+        return None
+    analista = str(payload.get("analista") or "").strip()[:120] or None
+    caso = str(payload.get("caso") or "").strip()[:120] or None
+    with _monitor_lock:
+        raw = timeline_file(monitor_id).read_bytes() if timeline_file(monitor_id).exists() else b""
+    timeline = [json.loads(line) for line in raw.decode("utf-8").splitlines() if line.strip()]
+    emitted = _now()
+    report_id = f"INF-{monitor_id}-{emitted.strftime('%Y%m%dT%H%M%SZ')}"
+    analysis = informe_pericial.analizar(monitor, timeline)
+    ia = asistente_ia.analizar(informe_pericial.resumen_para_ia(analysis)) if payload.get("ia") else None
+    document = informe_pericial.generar(monitor, timeline, informe_id=report_id, emitido_at=emitted.isoformat(),
+                                        timeline_sha256=hashlib.sha256(raw).hexdigest(), timeline_registros=len(timeline),
+                                        analista=analista, caso=caso, ia=ia, a=analysis).encode("utf-8")
+    digest = hashlib.sha256(document).hexdigest()
+    name = f"informe_{monitor_id}_{emitted.strftime('%Y%m%dT%H%M%SZ')}"
+    REPORTS_DIR.mkdir(parents=True, exist_ok=True)
+    (REPORTS_DIR / f"{name}.html").write_bytes(document)
+    (REPORTS_DIR / f"{name}.sha256").write_text(f"{digest}  {name}.html\n", encoding="utf-8")
+    entry = {"id": report_id, "monitor_id": monitor_id, "url": monitor["url"], "file": f"data/reports/{name}.html", "sha256": digest,
+             "bytes": len(document), "emitido_at": emitted.isoformat(), "timeline_sha256": hashlib.sha256(raw).hexdigest(),
+             "timeline_registros": len(timeline), "analista": analista, "caso": caso,
+             "ia": ({k: ia.get(k) for k in ("modelo", "tokens_entrada", "tokens_salida", "reutilizado", "tokens_consumidos_ahora", "error")} if ia else None)}
+    with _index_lock:
+        reports = json.loads(REPORTS_INDEX.read_text("utf-8")) if REPORTS_INDEX.exists() else []
+        reports.append(entry)
+        REPORTS_INDEX.write_text(json.dumps(reports, ensure_ascii=False, indent=2), encoding="utf-8")
+    append_record(monitor_id, {"at": emitted.isoformat(), "tipo": "evento", "evento": "informe", "url": monitor["url"],
+                               "detalle": f"{report_id} · SHA-256 {digest}", "informe": entry["file"], "sha256": digest},
+                  lambda current: current.update({"reports": current.get("reports", 0) + 1, "last_report": entry}))
+    return entry | {"view": f"/data/reports/{name}.html"}
+
+
+def list_reports(monitor_id):
+    reports = json.loads(REPORTS_INDEX.read_text("utf-8")) if REPORTS_INDEX.exists() else []
+    return [r | {"view": "/" + r["file"]} for r in reports if r["monitor_id"] == monitor_id][::-1]
 
 
 def monitor_loop():
@@ -707,7 +887,7 @@ def create_monitor(payload):
             raise ValueError(f"Máximo {MAX_MONITORS} monitores activos.")
         monitor = {"id": uuid.uuid4().hex[:12], "url": url, "interval": interval, "active": True, "created_at": _now().isoformat(),
                    "checks": 0, "last": None, "next_check_ts": time.time(), "next_check_at": _now().isoformat(),
-                   "snapshot_interval": SNAPSHOT_DEFAULT}
+                   "snapshot_interval": SNAPSHOT_DEFAULT, "dns_watch": False}
         monitors.append(monitor)
         save_monitors(monitors)
     _monitor_wake.set()
@@ -760,7 +940,7 @@ def delete_monitor(monitor_id):
     return True
 
 
-MONITOR_PATH = re.compile(r"^/api/monitors/([a-f0-9]{12})(?:/(timeline|check|snapshot|manual|pause|resume|interval|settings))?$")
+MONITOR_PATH = re.compile(r"^/api/monitors/([a-f0-9]{12})(?:/(timeline|check|snapshot|manual|pause|resume|interval|settings|dns|trace|report|reports))?$")
 EVIDENCE_IMAGE_PATH = re.compile(r"^/evidence/(\d{8}T\d{6,12}Z_[a-f0-9]{12}\.(png|jpg))$")
 
 
@@ -775,10 +955,39 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self):
+        if self.path == "/api/settings":
+            return self.respond(200, {"proxy": proxy_summary()})
+        if self.path == "/api/ia":
+            return self.respond(200, asistente_ia.estado())
+        report = REPORT_PATH.match(self.path)
+        if report:
+            path = REPORTS_DIR / report.group(1)
+            if not path.is_file():
+                return self.respond(404, {"error": "Informe no encontrado"})
+            if report.group(2) == "sha256":
+                return self.respond(200, path.read_bytes(), "text/plain; charset=utf-8")
+            # El informe no lleva scripts; la política lo garantiza aunque algún dato del sitio se colara en él.
+            body = path.read_bytes()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; img-src 'self'")
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.end_headers()
+            return self.wfile.write(body)
+        report_image = REPORT_IMAGE_PATH.match(self.path)
+        if report_image:
+            path = EVIDENCE_DIR / report_image.group(1)
+            if not path.is_file():
+                return self.respond(404, {"error": "Imagen no encontrada"})
+            return self.respond(200, path.read_bytes(), "image/png" if report_image.group(2) == "png" else "image/jpeg")
         if self.path == "/api/monitors":
             with _monitor_lock:
-                return self.respond(200, {"monitors": load_monitors(), "intervals": MONITOR_INTERVALS})
+                monitors = [{**monitor, "checking": monitor["id"] in _checking} for monitor in load_monitors()]
+                return self.respond(200, {"monitors": monitors, "intervals": MONITOR_INTERVALS})
         match = MONITOR_PATH.match(self.path)
+        if match and match.group(2) == "reports":
+            return self.respond(200, {"reports": list_reports(match.group(1))})
         if match and match.group(2) == "timeline":
             with _monitor_lock:
                 monitor = next((m for m in load_monitors() if m["id"] == match.group(1)), None)
@@ -823,11 +1032,20 @@ class Handler(BaseHTTPRequestHandler):
             if self.path == "/api/monitors":
                 return self.respond(201, create_monitor(self.read_payload()))
             match = MONITOR_PATH.match(self.path)
-            if not match or match.group(2) not in ("check", "snapshot", "manual", "pause", "resume", "interval", "settings"):
+            if not match or match.group(2) not in ("check", "snapshot", "manual", "pause", "resume", "interval", "settings", "dns", "trace", "report"):
                 return self.respond(404, {"error": "No encontrado"})
             monitor_id, action = match.groups()
             if action == "manual":
                 return self.manual_upload(monitor_id)
+            if action == "dns":
+                monitor = set_dns_watch(monitor_id, self.read_payload().get("enabled"))
+                return self.respond(200, monitor) if monitor else self.respond(404, {"error": "Monitor no encontrado"})
+            if action == "trace":
+                record = run_trace(monitor_id)
+                return self.respond(200, record) if record else self.respond(404, {"error": "Monitor no encontrado"})
+            if action == "report":
+                entry = emit_report(monitor_id, self.read_payload())
+                return self.respond(201, entry) if entry else self.respond(404, {"error": "Monitor no encontrado"})
             if action in ("check", "snapshot"):
                 record = run_monitor_check(monitor_id, force_snapshot=action == "snapshot")
                 return self.respond(200, record) if record else self.respond(409, {"error": "El monitor no existe o ya se está consultando."})
@@ -844,6 +1062,14 @@ class Handler(BaseHTTPRequestHandler):
             return self.respond(400, {"error": str(exc)})
 
     def do_POST(self):
+        if self.path == "/api/settings":
+            try:
+                payload = self.read_payload()
+                return self.respond(200, {"proxy": configure_proxy(payload.get("proxy", ""))})
+            except OverflowError:
+                return self.respond(413, {"error": "Solicitud demasiado grande"})
+            except (ValueError, json.JSONDecodeError) as exc:
+                return self.respond(400, {"error": str(exc)})
         if self.path.startswith("/api/monitors"):
             return self.monitor_post()
         if self.path not in ("/api/explore", "/api/explore/stream"):

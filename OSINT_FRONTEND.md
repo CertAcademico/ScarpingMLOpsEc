@@ -58,3 +58,28 @@ Las capturas manuales aparecen como rombos sobre la línea de tiempo y como fila
 Los snapshots requieren Playwright y Chromium: `venv/bin/pip install -r requirements.txt` y `venv/bin/python -m playwright install chromium`. Sin ellos, el monitoreo sigue funcionando y la pestaña indica cómo instalarlos. La app solo sirve los snapshots PNG (`/evidence/<archivo>.png`); el HTML capturado nunca se abre en el navegador, porque ejecutaría código del sitio dentro de la app.
 
 Los monitores y sus líneas de tiempo se guardan en `data/monitors/` y continúan al reiniciar la app; las consultas solo se ejecutan mientras `app.py` esté en marcha. Eliminar un monitor borra su línea de tiempo, pero conserva las capturas.
+
+## Vigilancia DNS
+
+El interruptor **DNS** de cada monitor activa la vigilancia de la resolución del dominio. Al encenderlo se toma una línea base. Desde ese momento, cada consulta del monitor obtiene sin caché los registros A, AAAA, CNAME, NS, MX, TXT, CAA y SOA (con TTL, PTR de las IP y resolvedores usados) y los compara con la observación anterior. Un cambio se marca como `dns` en la línea de tiempo (línea violeta), con los valores añadidos y retirados por tipo de registro. Un cambio del número de serie SOA indica que el titular editó la zona. Encender y apagar el interruptor queda registrado como evento, para que el informe muestre qué tramos estuvieron vigilados. Las consultas DNS usan los resolvedores del sistema, no el proxy HTTP.
+
+## Traza de red
+
+«Traza de red» ejecuta `traceroute` (`tracert` en Windows) hacia la IP del servidor. Para cada salto obtiene el hostname (PTR) y el sistema autónomo y titular de la red (servicio DNS público de Team Cymru). Añade además el WHOIS del dominio (registrador, fechas, servidores DNS declarados, estado y titular si es público) y una fotografía DNS. El resultado se guarda en la línea de tiempo con la salida original del comando, y se indica si la ruta cambió respecto a la traza anterior. Los saltos que no responden se conservan como `*`: muchos routers y CDN ignoran estas sondas.
+
+## Informe pericial
+
+«Informe pericial» genera un documento HTML autocontenido, sin JavaScript ni recursos remotos, listo para imprimir o guardar en PDF desde el navegador. Contiene: ficha (n.º de informe, caso, perito, periodo), resumen ejecutivo con cifras y dictamen descriptivo, metodología, línea de tiempo gráfica (estado HTTP, tiempo de respuesta, tramos de vigilancia DNS, cambios, lagunas, trazas y capturas manuales), distribución de respuestas, cronología de hechos, cambios y registros DNS, traza de ruta, WHOIS, servidor y certificado TLS, origen de las consultas, inventario de evidencias con SHA-256 y snapshots, limitaciones e integridad.
+
+Se guarda en `data/reports/informe_<monitor>_<fecha>.html`, junto con un `.sha256` verificable con `shasum -a 256 -c`, y se registra en `data/reports/index.json`. El informe incluye el SHA-256 de la línea de tiempo en el momento de emitirlo, y la emisión queda como evento en la propia línea de tiempo. Las **lagunas** son los intervalos entre consultas mayores que el doble del intervalo configurado: en ellos no hay observaciones.
+
+### Análisis asistido por IA (opcional, con tokens limitados)
+
+Al emitir el informe se puede marcar «Incluir análisis técnico asistido por IA». La app envía a la API de Anthropic **solo un resumen estructurado** (métricas, hechos, DNS, traza y WHOIS), nunca las capturas ni el HTML del sitio. El texto se incluye en una sección propia, marcada como ayuda de redacción y no como evidencia, con el modelo, los tokens usados y el SHA-256 de la entrada. Requiere `ANTHROPIC_API_KEY` definida al iniciar `app.py`. Límites configurables por variable de entorno:
+
+- `F0R3NSIC_IA_TOKENS_DIA`: tokens por día UTC (entrada + salida). Por defecto, 50 000.
+- `F0R3NSIC_IA_MAX_SALIDA`: tokens de respuesta por informe. Por defecto, 2 500.
+- `F0R3NSIC_IA_MAX_ENTRADA`: tamaño máximo del resumen enviado. Por defecto, 12 000.
+- `F0R3NSIC_IA_MODELO`: por defecto, `claude-opus-5-5`, con esfuerzo bajo y respaldo automático de modelo si la solicitud se rechaza.
+
+Antes de cada llamada se cuentan los tokens de entrada y se rechaza la solicitud si no cabe en lo que queda del día. Si el mismo resumen ya se analizó, se reutiliza la respuesta guardada en `data/ia_cache/` sin consumir tokens. El consumo diario se guarda en `data/ia_uso.json`.
