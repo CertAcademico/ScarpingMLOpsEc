@@ -396,7 +396,7 @@ def _ia_html(ia):
     if not ia:
         return ""
     if ia.get("error"):
-        return f'<section><h2>10. Análisis asistido</h2><p class="vacio">No se incluyó: {esc(ia["error"])}</p></section>'
+        return f'<section><h2>11. Análisis asistido</h2><p class="vacio">No se incluyó: {esc(ia["error"])}</p></section>'
     bloques, lista = [], []
 
     def cerrar_lista():
@@ -417,7 +417,7 @@ def _ia_html(ia):
             cerrar_lista()
             bloques.append(f"<p>{esc(linea)}</p>")
     cerrar_lista()
-    return (f'<section class="ia"><h2>10. Análisis técnico asistido por IA</h2>'
+    return (f'<section class="ia"><h2>11. Análisis técnico asistido por IA</h2>'
             f'<p class="aviso">Texto generado por {esc(ia.get("modelo"))} a partir del resumen estructurado de este informe (SHA-256 de la entrada '
             f'<code>{esc(ia.get("entrada_sha256", "")[:24])}…</code>, {esc(ia.get("tokens_entrada"))} tokens de entrada y {esc(ia.get("tokens_salida"))} de salida'
             f'{", reutilizado de un análisis previo idéntico" if ia.get("reutilizado") else ""}). No constituye evidencia: es una ayuda de redacción que el perito '
@@ -485,11 +485,56 @@ td{border-bottom:1px solid var(--line);padding:6px 8px;vertical-align:top;overfl
 .capturas img{display:block;width:100%;height:140px;object-fit:cover;object-position:top;background:#fff}.capturas figcaption{font-size:10px;padding:6px 8px;color:var(--muted)}
 .firma{margin-top:40px;display:grid;grid-template-columns:1fr 1fr;gap:40px}.firma div{border-top:1px solid var(--text);padding-top:6px;font-size:12px;color:var(--muted)}
 footer{margin-top:30px;font-size:11px;color:var(--muted);border-top:1px solid var(--line);padding-top:12px}
+.custodia{margin:8px 0 4px}.custodia .caja{fill:var(--panel);stroke:var(--line);stroke-width:1}.custodia .sello-caja{fill:var(--panel);stroke:var(--accent);stroke-width:2}.custodia .tt{fill:var(--text);font-weight:650;font-size:12px}.custodia .st{fill:var(--muted);font-size:10px}.custodia .mono{font:11px ui-monospace,monospace;fill:var(--muted)}.custodia .flecha{stroke:var(--muted);stroke-width:1.5;fill:none;marker-end:url(#fl)}.custodia .flecha-recta{stroke:var(--muted);stroke-width:1.5}.custodia .etqf{fill:var(--muted);font-size:10px}pre.verif{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:12px 14px;font:11px/1.6 ui-monospace,monospace;overflow-x:auto;white-space:pre;color:var(--text);margin:8px 0}
 code{word-break:break-all}.hoja{overflow-wrap:anywhere}
 @media(max-width:720px){table{display:block;overflow-x:auto}td{min-width:90px}.hechos td:first-child{white-space:normal}.hoja{padding:22px 16px}.dos,.firma{grid-template-columns:1fr}.salto{grid-template-columns:14px 24px 1fr;}.salto .s-host,.salto .s-red{grid-column:3}.salto .s-ms{grid-column:3;text-align:left}.salto.cab{display:none}.barra{grid-template-columns:90px 1fr}.barra-num{grid-column:2;text-align:left}}
 @media print{:root{--bg:#fff;--paper:#fff;--text:#000;--muted:#555;--line:#ccc;--panel:#f2f2f2;--manual:#000}body{background:#fff}main{padding:0;max-width:none}.hoja{border:0;padding:0}
 h2{break-after:avoid}section{break-inside:auto}table,tr,.salto,figure,.cifras{break-inside:avoid}a{color:inherit;text-decoration:none}}
 """
+
+
+def relaciones_evidencia(timeline):
+    """Enlaces verificables entre archivos: cada snapshot deja constancia del archivo de origen del que se generó."""
+    rel = []
+    for registro in timeline:
+        snap = registro.get("snapshot") or {}
+        if snap.get("file") and snap.get("html"):
+            rel.append({"at": registro.get("observado_at") or registro["at"],
+                        "derivado": f"data/osint_evidence/{snap['file']}", "derivado_sha": snap.get("sha256"),
+                        "origen": snap["html"], "nota": snap.get("render") or "",
+                        "manual": registro.get("tipo") == "manual"})
+    return rel
+
+
+def grafo_custodia(a, monitor, timeline_registros, timeline_sha256):
+    """Diagrama SVG de la cadena de custodia: el informe sella la línea de tiempo, que sella cada evidencia por su SHA-256."""
+    ev = a["evidencias"]
+    n_http = sum(1 for e in ev if str(e["tipo"]).startswith("Respuesta HTTP"))
+    n_snap = sum(1 for e in ev if "Snapshot" in str(e["tipo"]))
+    n_man = sum(1 for e in ev if e["tipo"] == "Captura manual")
+    sha = (timeline_sha256 or "")[:28]
+    cajas = [("Capturas HTTP", f"{n_http} archivo(s)", 40), ("Snapshots PNG", f"{n_snap} imagen(es)", 335), ("Capturas manuales", f"{n_man} archivo(s)", 630)]
+    cuerpo = "".join(
+        f'<rect class="caja" x="{x}" y="236" width="250" height="72" rx="7"/>'
+        f'<text class="tt" x="{x+125}" y="266" text-anchor="middle">{esc(t)}</text>'
+        f'<text class="st" x="{x+125}" y="286" text-anchor="middle">{esc(s)}</text>' for t, s, x in cajas)
+    drops = "".join(f'<line class="flecha" x1="{x+125}" y1="218" x2="{x+125}" y2="236"/>' for _, _, x in cajas)
+    return (f'<svg class="grafico custodia" viewBox="0 0 920 322" preserveAspectRatio="xMidYMid meet" role="img" '
+            f'aria-label="Cadena de custodia por sumas de verificación">'
+            f'<defs><marker id="fl" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto">'
+            f'<path d="M0,1 L9,5 L0,9 z" fill="var(--muted)"/></marker></defs>'
+            f'<rect class="sello-caja" x="300" y="8" width="320" height="54" rx="8"/>'
+            f'<text class="tt" x="460" y="32" text-anchor="middle">Informe pericial (este documento)</text>'
+            f'<text class="st" x="460" y="50" text-anchor="middle">Su SHA-256 queda en data/reports/index.json</text>'
+            f'<line class="flecha" x1="460" y1="62" x2="460" y2="116"/>'
+            f'<text class="etqf" x="468" y="92">sella</text>'
+            f'<rect class="caja" x="220" y="118" width="480" height="60" rx="8"/>'
+            f'<text class="tt" x="460" y="143" text-anchor="middle">Línea de tiempo · {esc(monitor["id"])}.jsonl</text>'
+            f'<text class="mono" x="460" y="162" text-anchor="middle">{esc(timeline_registros)} registros · SHA-256 {esc(sha)}…</text>'
+            f'<line class="flecha-recta" x1="460" y1="178" x2="460" y2="218"/>'
+            f'<line class="flecha-recta" x1="165" y1="218" x2="755" y2="218"/>'
+            f'<text class="etqf" x="468" y="210">registra el SHA-256 de cada evidencia</text>'
+            f'{drops}{cuerpo}</svg>')
 
 
 def generar(monitor, timeline, *, informe_id, emitido_at, timeline_sha256, timeline_registros, analista=None, caso=None, ia=None, a=None):
@@ -576,6 +621,32 @@ def generar(monitor, timeline, *, informe_id, emitido_at, timeline_sha256, timel
     capturas = ('<div class="capturas">' + "".join(f'<figure><img src="../osint_evidence/{esc(e["snapshot"])}" alt="Snapshot del {esc(fecha(e["at"]))}" loading="lazy">'
                                                   f'<figcaption>{esc(fecha(e["at"]))}<br>SHA-256 {esc((e["sha256"] or "")[:16])}…</figcaption></figure>' for e in snaps) + "</div>") if snaps else ""
 
+    # 9. Relacionamiento de evidencia digital
+    rel = relaciones_evidencia(timeline)
+    filas_rel = [[esc(fecha(r["at"])), f'<code>{esc(r["derivado"])}</code><br>SHA-256 <code>{esc(r["derivado_sha"] or "")}</code>',
+                  f'<code>{esc(r["origen"])}</code>', esc(("Captura manual · " if r["manual"] else "") + (r["nota"] or ""))] for r in rel[-120:]]
+    relaciones_tabla = _tabla(filas_rel, ["Fecha (UTC)", "Archivo derivado", "Archivo de origen", "Relación"]) if filas_rel else '<p class="vacio">No hay snapshots derivados de otra evidencia en este periodo.</p>'
+    verif = (f"# 1. Integridad de la línea de tiempo (debe coincidir con el SHA-256 del apartado de integridad)\n"
+             f"shasum -a 256 data/monitors/{monitor['id']}.jsonl\n"
+             f"#   -> {timeline_sha256}\n\n"
+             f"# 2. Integridad de una evidencia concreta: su SHA-256 esta registrado en la linea de tiempo\n"
+             f"grep <archivo> data/monitors/{monitor['id']}.jsonl   # muestra el SHA-256 registrado\n"
+             f"shasum -a 256 data/osint_evidence/<archivo>          # debe coincidir con el registrado\n\n"
+             f"# 3. Integridad de este informe (el nombre exacto esta en data/reports/index.json)\n"
+             f"shasum -c data/reports/informe_{monitor['id']}_<fecha>.html.sha256")
+    seccion_rel = (f'<section><h2>9. Relacionamiento de evidencia digital</h2>'
+                   f'<p class="meta">Las evidencias no están sueltas: forman una cadena verificable por sumas de verificación (SHA-256). '
+                   f'Este informe sella el estado de la línea de tiempo; la línea de tiempo registra el SHA-256 de cada archivo conservado; '
+                   f'y cada snapshot deja constancia del archivo de origen del que se generó. Recalcular los hashes comprueba, de extremo a extremo, '
+                   f'que ningún archivo se alteró después de registrarse.</p>'
+                   f'{grafo_custodia(a, monitor, timeline_registros, timeline_sha256)}'
+                   f'<h3>Derivaciones registradas</h3>'
+                   f'<p class="meta">Cada snapshot visual se generó a partir de una captura concreta; ambos archivos son identificables por su SHA-256.</p>'
+                   f'{relaciones_tabla}'
+                   f'<h3>Verificación de la cadena</h3>'
+                   f'<p class="meta">Comandos para recomprobar la integridad en cualquier equipo (macOS/Linux; en Windows use <code>CertUtil -hashfile &lt;archivo&gt; SHA256</code>):</p>'
+                   f'<pre class="verif">{esc(verif)}</pre></section>'
+                   f'\n')
     lagunas = _tabla([[esc(fecha(l["desde"])), esc(fecha(l["hasta"])), esc(duracion(l["segundos"]))] for l in a["lagunas"][:60]], ["Desde", "Hasta", "Duración"]) if a["lagunas"] else '<p class="meta">No se detectaron lagunas: todas las consultas consecutivas están dentro del doble del intervalo configurado.</p>'
 
     return f"""<!doctype html>
@@ -623,7 +694,7 @@ def generar(monitor, timeline, *, informe_id, emitido_at, timeline_sha256, timel
 
 <section><h2>8. Inventario de evidencias</h2><p class="meta">Archivos conservados durante el monitoreo. La integridad de cada uno se verifica recalculando su SHA-256 (p. ej. <code>shasum -a 256 &lt;archivo&gt;</code>).</p>{evidencias}{capturas}</section>
 
-<section><h2>9. Limitaciones</h2><ul>
+{seccion_rel}<section><h2>10. Limitaciones</h2><ul>
 <li>Las consultas solo se ejecutan mientras <code>app.py</code> está en marcha; fuera de esos periodos no hay observaciones (ver lagunas).</li>
 <li>Las respuestas reflejan lo que el servidor entregó a esta herramienta desde la IP de salida indicada; otros clientes, ubicaciones o navegadores con JavaScript pueden recibir contenido distinto.</li>
 <li>Los registros DNS se obtienen con los resolvedores del sistema; un CDN o un DNS geográfico puede devolver otras IP en otras redes. Los cambios entre dos observaciones se detectan en la siguiente consulta, no en el instante exacto en que ocurrieron.</li>
@@ -632,7 +703,7 @@ def generar(monitor, timeline, *, informe_id, emitido_at, timeline_sha256, timel
 <li>Los snapshots visuales se renderizan desde el HTML capturado, sin JavaScript ni recursos externos; pueden diferir de la vista en un navegador.</li>
 </ul></section>
 {_ia_html(ia)}
-<section><h2>{"11" if ia else "10"}. Integridad del informe</h2>
+<section><h2>{"12" if ia else "11"}. Integridad del informe</h2>
 <p>Al emitir este informe, la línea de tiempo del monitor (<code>data/monitors/{esc(monitor["id"])}.jsonl</code>) contenía <b>{esc(timeline_registros)}</b> registros y su SHA-256 era:</p>
 <p><code>{esc(timeline_sha256)}</code></p>
 <p class="meta">El SHA-256 de este documento HTML se guarda junto a él en un archivo <code>.sha256</code> con el mismo nombre y se registra en <code>data/reports/index.json</code>. Cualquier modificación del documento cambia ese valor.</p>
